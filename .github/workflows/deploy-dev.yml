@@ -102,7 +102,7 @@ jobs:
           echo "Starting deployment to vm-gtl-dev..."
 
           az vm run-command invoke \
-            --resource-group "RG Sourabh Majali" \
+            --resource-group "RG_Sourabh_Majali" \
             --name "vm-gtl-dev" \
             --command-id RunPowerShellScript \
             --parameters "artifactUrl=$ARTIFACT_URL" \
