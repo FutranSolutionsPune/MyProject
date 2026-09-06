@@ -1,0 +1,35 @@
+name: Deploy to DEV
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  deploy-dev:
+    name: Deploy artifact to DEV
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    environment:
+      name: DEV
+
+    steps:
+      - name: Download CI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MyProject-${{ github.event.workflow_run.head_sha }}
+          path: ./artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Show artifact contents
+        run: |
+          echo "Artifact downloaded successfully."
+          echo "Contents:"
+          find ./artifact -type f
