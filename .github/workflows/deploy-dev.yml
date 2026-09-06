@@ -9,6 +9,7 @@ on:
 permissions:
   actions: read
   contents: read
+  id-token: write
 
 jobs:
   deploy-dev:
@@ -20,6 +21,13 @@ jobs:
       name: DEV
 
     steps:
+      - name: Login to Azure using OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
       - name: Download CI artifact
         uses: actions/download-artifact@v4
         with:
@@ -28,8 +36,26 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
 
-      - name: Show artifact contents
+      - name: Create deployment package
         run: |
-          echo "Artifact downloaded successfully."
-          echo "Contents:"
-          find ./artifact -type f
+          cd artifact
+          zip -r ../MyProject.zip .
+          cd ..
+          ls -lh MyProject.zip
+
+      - name: Convert package to Base64
+        run: |
+          base64 -w 0 MyProject.zip > MyProject.base64
+          echo "Package encoded successfully."
+
+      - name: Deploy to Azure VM
+        env:
+          PACKAGE_B64: ${{ secrets.DEPLOYMENT_PACKAGE }}
+        run: |
+          echo "Starting deployment to vm-gtl-dev..."
+
+          az vm run-command invoke \
+            --resource-group <YOUR_RESOURCE_GROUP> \
+            --name vm-gtl-dev \
+            --command-id RunPowerShellScript \
+            --scripts "Write-Host 'Deployment test from GitHub Actions'"
