@@ -3,196 +3,90 @@ name: Deploy to DEV
 on:
   workflow_run:
     workflows: ["CI"]
-    types:
-      - completed
-    branches:
-      - main
+    types: [completed]
+    branches: [main]
 
 permissions:
   actions: read
   contents: read
-  id-token: write
 
 jobs:
   deploy-dev:
-    name: Deploy artifact to DEV
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
+
+    runs-on: [self-hosted, windows, dev-iis]
 
     environment:
       name: DEV
 
     steps:
-      - name: Login to Azure using OIDC
-        uses: azure/login@v2
+      - name: Download CI artifact
+        uses: actions/download-artifact@v5
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          name: MyProject-${{ github.event.workflow_run.head_sha }}
+          path: ${{ runner.temp }}\MyProject
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
 
-      - name: Find CI artifact
-        id: artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      - name: Show artifact
+        shell: powershell
         run: |
-          ARTIFACT_NAME="MyProject-${HEAD_SHA}"
+          Write-Host "Artifact contents:"
+          Get-ChildItem "${{ runner.temp }}\MyProject" -Recurse
 
-          echo "Looking for artifact: $ARTIFACT_NAME"
-          echo "Workflow run: $RUN_ID"
-
-          ARTIFACT_URL="https://api.github.com/repos/msourabh09/MyProject/actions/runs/${RUN_ID}/artifacts"
-
-          ARTIFACT_ID=$(curl -sS \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "$ARTIFACT_URL" |
-            jq -r --arg NAME "$ARTIFACT_NAME" \
-            '.artifacts[] | select(.name == $NAME) | .id' |
-            head -n 1)
-
-          if [ -z "$ARTIFACT_ID" ] || [ "$ARTIFACT_ID" = "null" ]; then
-            echo "ERROR: Artifact not found."
-            exit 1
-          fi
-
-          echo "Artifact ID: $ARTIFACT_ID"
-          echo "artifact_id=$ARTIFACT_ID" >> "$GITHUB_OUTPUT"
-
-      - name: Get temporary artifact download URL
-        id: download
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARTIFACT_ID: ${{ steps.artifact.outputs.artifact_id }}
+      - name: Deploy to IIS
+        shell: powershell
         run: |
-          DOWNLOAD_ENDPOINT="https://api.github.com/repos/msourabh09/MyProject/actions/artifacts/${ARTIFACT_ID}/zip"
+          Import-Module WebAdministration
 
-          echo "Requesting temporary artifact URL..."
+          $siteName = "MyProject"
+          $sitePath = "C:\inetpub\wwwroot\MyProject"
+          $artifactPath = "${{ runner.temp }}\MyProject"
 
-          curl -sS \
-            -D headers.txt \
-            -o /dev/null \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2026-03-10" \
-            "$DOWNLOAD_ENDPOINT"
+          if (-not (Test-Path $artifactPath)) {
+              throw "Artifact folder not found: $artifactPath"
+          }
 
-          ARTIFACT_URL=$(grep -i '^location:' headers.txt | sed 's/location: //I' | tr -d '\r')
+          New-Item -ItemType Directory -Path $sitePath -Force | Out-Null
 
-          if [ -z "$ARTIFACT_URL" ]; then
-            echo "ERROR: GitHub did not return a download URL."
-            cat headers.txt
-            exit 1
-          fi
+          Write-Host "Stopping IIS site..."
+          Stop-Website -Name $siteName -ErrorAction SilentlyContinue
+          Stop-WebAppPool -Name $siteName -ErrorAction SilentlyContinue
 
-          echo "Temporary artifact URL obtained."
+          Start-Sleep -Seconds 2
 
-          {
-            echo 'artifact_url<<EOF'
-            echo "$ARTIFACT_URL"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          Write-Host "Clearing existing application files..."
 
-      - name: Deploy artifact to Azure VM
-        env:
-          ARTIFACT_URL: ${{ steps.download.outputs.artifact_url }}
-        run: |
-          echo "Starting deployment to vm-gtl-dev..."
+          Get-ChildItem -Path $sitePath -Force |
+            Remove-Item -Recurse -Force
 
-          az vm run-command invoke \
-            --resource-group "RG_Sourabh_Majali" \
-            --name "vm-gtl-dev" \
-            --command-id RunPowerShellScript \
-            --parameters "artifactUrl=$ARTIFACT_URL" \
-            --scripts '
-              param(
-                [string]$artifactUrl
-              )
+          Write-Host "Copying new application files..."
 
-              $ErrorActionPreference = "Stop"
+          Copy-Item `
+            -Path "$artifactPath\*" `
+            -Destination $sitePath `
+            -Recurse `
+            -Force
 
-              $siteName = "MyProject"
-              $sitePath = "C:\inetpub\wwwroot\MyProject"
-              $zipPath = "C:\Windows\Temp\MyProject.zip"
+          Write-Host "Starting IIS..."
 
-              Write-Host "Starting deployment..."
-              Write-Host "Downloading artifact..."
-
-              Invoke-WebRequest `
-                -Uri $artifactUrl `
-                -OutFile $zipPath `
-                -UseBasicParsing
-
-              if (-not (Test-Path $zipPath)) {
-                throw "Artifact download failed."
-              }
-
-              Write-Host "Artifact downloaded."
-
-              Write-Host "Stopping IIS site..."
-              Import-Module WebAdministration
-
-              Stop-Website -Name $siteName -ErrorAction SilentlyContinue
-              Stop-WebAppPool -Name $siteName -ErrorAction SilentlyContinue
-
-              Start-Sleep -Seconds 2
-
-              Write-Host "Preparing deployment directory..."
-
-              if (Test-Path "$sitePath\app_offline.htm") {
-                Remove-Item "$sitePath\app_offline.htm" -Force
-              }
-
-              Get-ChildItem -Path $sitePath -Force |
-                Remove-Item -Recurse -Force
-
-              Write-Host "Extracting artifact..."
-
-              Expand-Archive `
-                -Path $zipPath `
-                -DestinationPath $sitePath `
-                -Force
-
-              Remove-Item $zipPath -Force
-
-              Write-Host "Starting IIS..."
-
-              Start-WebAppPool -Name $siteName
-              Start-Website -Name $siteName
-
-              Write-Host "Deployment completed."
-
-              Write-Host "IIS site status:"
-              Get-Website -Name $siteName
-
-              Write-Host "Application files:"
-              Get-ChildItem $sitePath -File |
-                Select-Object -First 10 Name
-            '
+          Start-WebAppPool -Name $siteName
+          Start-Website -Name $siteName
 
       - name: Verify deployment
+        shell: powershell
         run: |
-          echo "Verifying deployment through Azure VM Run Command..."
+          Start-Sleep -Seconds 5
 
-          az vm run-command invoke \
-            --resource-group "RG_Sourabh_Majali" \
-            --name "vm-gtl-dev" \
-            --command-id RunPowerShellScript \
-            --scripts '
-              $ErrorActionPreference = "Stop"
+          $response = Invoke-WebRequest `
+            -Uri "http://localhost" `
+            -UseBasicParsing
 
-              $response = Invoke-WebRequest `
-                -Uri "http://localhost" `
-                -UseBasicParsing
+          if ($response.StatusCode -ne 200) {
+              throw "IIS returned HTTP $($response.StatusCode)"
+          }
 
-              Write-Host "HTTP Status: $($response.StatusCode)"
-              Write-Host "Server: $($response.Headers.Server)"
-
-              if ($response.StatusCode -ne 200) {
-                throw "Application returned HTTP $($response.StatusCode)"
-              }
-
-              Write-Host "DEV deployment verification successful."
-            '
+          Write-Host "======================================"
+          Write-Host "DEV deployment successful!"
+          Write-Host "HTTP Status: $($response.StatusCode)"
+          Write-Host "======================================"
