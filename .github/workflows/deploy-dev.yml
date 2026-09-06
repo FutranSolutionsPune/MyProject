@@ -177,7 +177,7 @@ jobs:
           echo "Verifying deployment through Azure VM Run Command..."
 
           az vm run-command invoke \
-            --resource-group "RG Sourabh Majali" \
+            --resource-group "RG_Sourabh_Majali" \
             --name "vm-gtl-dev" \
             --command-id RunPowerShellScript \
             --scripts '
