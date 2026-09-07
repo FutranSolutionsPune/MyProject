@@ -397,6 +397,8 @@
               // does XHR against the src, but blob:null/ from a file:// origin is
               // silently dropped. Inlining makes it a plain inline babel script,
               // which transformScriptTags handles unconditionally.
+
+              //////////////////// change
               if ((s.type === 'text/babel' || s.type === 'text/jsx') && s.src) {
                 const pre = resourceBlobs[s.src.split('#')[0]];
                 s.textContent = pre ? await pre.text() : await (await fetch(s.src)).text();
