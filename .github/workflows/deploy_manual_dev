@@ -1,0 +1,112 @@
+name: Deploy to DEV - Manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: "CI workflow run ID containing the artifact"
+        required: true
+        type: string
+
+      commit_sha:
+        description: "Commit SHA used to create the CI artifact"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  deploy-dev:
+    runs-on: [self-hosted, windows, dev-iis]
+
+    environment:
+      name: DEV
+
+    steps:
+      - name: Download CI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MyProject-${{ inputs.commit_sha }}
+          path: ${{ runner.temp }}\MyProject
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.ci_run_id }}
+
+      - name: Show artifact
+        shell: powershell
+        run: |
+          Write-Host "Artifact contents:"
+          Get-ChildItem "${{ runner.temp }}\MyProject" -Recurse
+
+      - name: Deploy to IIS
+        shell: powershell
+        run: |
+          Import-Module WebAdministration
+
+          $siteName = "MyProject"
+          $sitePath = "C:\inetpub\wwwroot\MyProject"
+          $artifactPath = "${{ runner.temp }}\MyProject"
+
+          if (-not (Test-Path $artifactPath)) {
+              throw "Artifact folder not found: $artifactPath"
+          }
+
+          New-Item -ItemType Directory -Path $sitePath -Force | Out-Null
+
+          # Stop IIS website only if it is running
+          $site = Get-Website -Name $siteName -ErrorAction SilentlyContinue
+
+          if ($site -and $site.State -eq "Started") {
+              Write-Host "Stopping IIS site..."
+              Stop-Website -Name $siteName
+          }
+
+          # Stop application pool only if it is running
+          $appPool = Get-WebAppPoolState -Name $siteName -ErrorAction SilentlyContinue
+
+          if ($appPool -and $appPool.Value -eq "Started") {
+              Write-Host "Stopping IIS application pool..."
+              Stop-WebAppPool -Name $siteName
+          }
+
+          Start-Sleep -Seconds 2
+
+          Write-Host "Clearing existing application files..."
+
+          Get-ChildItem -Path $sitePath -Force |
+            Remove-Item -Recurse -Force
+
+          Write-Host "Copying new application files..."
+
+          Copy-Item `
+            -Path "$artifactPath\*" `
+            -Destination $sitePath `
+            -Recurse `
+            -Force
+
+          Write-Host "Starting IIS application pool..."
+
+          Start-WebAppPool -Name $siteName
+
+          Write-Host "Starting IIS site..."
+
+          Start-Website -Name $siteName
+
+      - name: Verify deployment
+        shell: powershell
+        run: |
+          Start-Sleep -Seconds 5
+
+          $response = Invoke-WebRequest `
+            -Uri "http://localhost" `
+            -UseBasicParsing
+
+          if ($response.StatusCode -ne 200) {
+              throw "IIS returned HTTP $($response.StatusCode)"
+          }
+
+          Write-Host "======================================"
+          Write-Host "DEV deployment successful!"
+          Write-Host "HTTP Status: $($response.StatusCode)"
+          Write-Host "======================================"
