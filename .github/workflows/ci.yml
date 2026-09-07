@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore MyProject.sln
+
+      - name: Build
+        run: dotnet build MyProject.sln --no-restore --configuration Release
+
+      - name: Test
+        run: dotnet test MyProject.sln --no-build --configuration Release
+
+      - name: Publish application
+        run: dotnet publish MyProject/MyProject.csproj --configuration Release --no-build --output ./publish
+
+      - name: Upload application artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyProject-${{ github.sha }}
+          path: ./publish
+          retention-days: 7
