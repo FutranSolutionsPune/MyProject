@@ -49,9 +49,21 @@ jobs:
 
           New-Item -ItemType Directory -Path $sitePath -Force | Out-Null
 
-          Write-Host "Stopping IIS site..."
-          Stop-Website -Name $siteName -ErrorAction SilentlyContinue
-          Stop-WebAppPool -Name $siteName -ErrorAction SilentlyContinue
+          # Stop IIS website only if it is running
+          $site = Get-Website -Name $siteName -ErrorAction SilentlyContinue
+
+          if ($site -and $site.State -eq "Started") {
+              Write-Host "Stopping IIS site..."
+              Stop-Website -Name $siteName
+          }
+
+          # Stop application pool only if it is running
+          $appPool = Get-WebAppPoolState -Name $siteName -ErrorAction SilentlyContinue
+
+          if ($appPool -and $appPool.Value -eq "Started") {
+              Write-Host "Stopping IIS application pool..."
+              Stop-WebAppPool -Name $siteName
+          }
 
           Start-Sleep -Seconds 2
 
@@ -68,9 +80,12 @@ jobs:
             -Recurse `
             -Force
 
-          Write-Host "Starting IIS..."
+          Write-Host "Starting IIS application pool..."
 
           Start-WebAppPool -Name $siteName
+
+          Write-Host "Starting IIS site..."
+
           Start-Website -Name $siteName
 
       - name: Verify deployment
